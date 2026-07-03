@@ -10,9 +10,10 @@ A cross-platform bash shell implemented entirely in Python. Works on Windows, ma
 - **Variable expansion** — `$VAR`, `${VAR}`, `$?`, `$#`, `$@`, `$1`..`$9`
 - **Arithmetic** — `$(( expression ))` with full Python math
 - **Command substitution** — `$(command)` and backticks
-- **Tab completion** — bash-style: single match auto-completes, double-Tab shows list
+- **Tab completion** — bash-style: commands complete to first match (builtins priority), paths do lazy common prefix completion; Alt lists all matches
+- **Keyboard shortcuts** — Ctrl+C (cancel), Ctrl+D (exit), Ctrl+L (clear screen)
 - **History** — persistent command history with search
-- **Pure Python** — no dependency on `cmd.exe`, `bash`, or other system shells
+- **Pure Python** — no dependency on `cmd.exe`, `bash`, or other system shells; zero external dependencies
 
 ## Installation
 
@@ -26,13 +27,7 @@ uv venv
 uv pip install -e .
 
 # Run
-uv run pybash
-```
-
-Or run directly without installing:
-
-```bash
-uv run python -m pybash
+python -m pybash
 ```
 
 ## Quick Start
@@ -263,10 +258,9 @@ greet() { echo hello; }; greet
 
 ## Tab Completion
 
-- **Single match**: Auto-completes immediately (e.g., `ech` + Tab -> `echo`)
-- **Multiple matches**: First Tab does nothing, second Tab shows all possibilities
-- **Command completion**: Built-in commands + PATH executables
-- **Path completion**: File and directory names
+- **Commands**: Auto-completes to first matching command (builtins have highest priority)
+- **Paths/files**: Lazy common prefix completion — inserts longest common prefix among matches
+- **Alt key**: Lists all matching commands (builtins sorted first, then externals)
 
 ## Architecture
 
@@ -283,8 +277,7 @@ pybash/
 ## Dependencies
 
 - Python 3.14+
-- `prompt-toolkit` — Interactive terminal UI (history, key bindings)
-- No other dependencies — everything else is pure Python
+- Zero external dependencies — everything is pure Python using only the standard library
 
 ## License
 

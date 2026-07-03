@@ -1,30 +1,18 @@
 """
 Core shell: REPL loop, command parsing, pipeline, redirection, variable expansion.
+Tab completion via Trie. On Windows uses Console API via ctypes, on Linux uses readline.
 """
 import os
 import sys
 import re
 import platform
+import struct
 import subprocess
 import getpass
 import socket
+import atexit
 from pathlib import Path
 from io import StringIO
-
-try:
-    from prompt_toolkit import PromptSession
-    from prompt_toolkit.history import FileHistory
-    from prompt_toolkit.formatted_text import ANSI
-    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-    from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.keys import Keys
-    from prompt_toolkit.buffer import Buffer
-    from prompt_toolkit.layout import Window, BufferControl, HSplit, Layout
-    from prompt_toolkit.layout.controls import FormattedTextControl
-    from prompt_toolkit.layout.dimension import Dimension
-    HAS_PT = True
-except ImportError:
-    HAS_PT = False
 
 from pybash.utils import Tokenizer, Trie
 
@@ -32,6 +20,36 @@ IS_WINDOWS = platform.system() == "Windows"
 
 if IS_WINDOWS:
     os.system("")
+    import ctypes
+    import ctypes.wintypes
+
+    _kernel32 = ctypes.windll.kernel32
+    _user32 = ctypes.windll.user32
+    _STD_INPUT_HANDLE = -10
+    _STD_OUTPUT_HANDLE = -11
+    _ENABLE_PROCESSED_INPUT = 0x0001
+    _ENABLE_LINE_INPUT = 0x0002
+    _ENABLE_ECHO_INPUT = 0x0004
+
+    _hStdin = _kernel32.GetStdHandle(_STD_INPUT_HANDLE)
+    _hStdout = _kernel32.GetStdHandle(_STD_OUTPUT_HANDLE)
+
+    _INPUT_RECORD_SIZE = 20
+    _KEY_EVENT = 0x0001
+
+_ctrl_c_flag = [False]
+
+if IS_WINDOWS:
+    @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.DWORD)
+    def _console_ctrl_handler(ctrl_type):
+        if ctrl_type == 0:
+            _ctrl_c_flag[0] = True
+            return True
+        return False
+    _kernel32.SetConsoleCtrlHandler(_console_ctrl_handler, True)
+else:
+    import readline
+    msvcrt = None
 
 
 class ShellState:
@@ -152,12 +170,12 @@ class Shell:
         self.state = ShellState()
         self.builtins = BuiltinCommands(self.state)
         self.engine = ScriptEngine(self.state, self)
-        self._pt_session = None
         self._cmd_trie = Trie()
         self._path_trie_cache = {}
         self._build_cmd_trie()
+        self._rl_saved_completer = None
 
-    def _get_prompt_tokens(self):
+    def _get_prompt_str(self):
         cwd = os.getcwd()
         home = os.path.expanduser("~")
         try:
@@ -185,139 +203,344 @@ class Shell:
 
         suffix = "#" if is_root else "$"
 
-        prompt = (
+        return (
             f"\033[1;35mPyBash\033[0m "
             f"\033[1;32m{user}@{host}\033[0m "
             f"\033[1;34m{cwd_display}\033[0m "
             f"{suffix} "
         )
 
-        if HAS_PT:
-            return ANSI(prompt)
-        else:
-            return prompt
-
     def run(self):
         print(f"PyBash {platform.system()} - Type 'help' for help")
-        if HAS_PT:
-            history = FileHistory(self.state.history_file)
-            bindings = KeyBindings()
-            self._tab_matches = []
-            self._tab_pending = False
-
-            @bindings.add(Keys.Tab)
-            def _(event):
-                self._handle_tab(event)
-
-            self._pt_session = PromptSession(
-                history=history,
-                auto_suggest=AutoSuggestFromHistory(),
-                complete_while_typing=False,
-                key_bindings=bindings,
-            )
-            self._run_pt()
+        if IS_WINDOWS:
+            self._run_win()
         else:
-            self._run_basic()
+            self._setup_readline()
+            self._run_readline()
 
-    def _run_pt(self):
-        while self.state.running:
-            try:
-                line = self._pt_session.prompt(
-                    self._get_prompt_tokens(),
-                )
-                if not line.strip():
-                    continue
-                self.execute_line(line)
-            except KeyboardInterrupt:
-                print()
-            except EOFError:
-                print()
-                break
-            except Exception as e:
-                print(f"pybash: {e}", file=sys.stderr)
+    def _setup_readline(self):
+        hist_file = self.state.history_file
+        try:
+            readline.read_history_file(hist_file)
+        except FileNotFoundError:
+            pass
+        readline.set_history_length(10000)
+        atexit.register(readline.write_history_file, hist_file)
 
-    def _run_basic(self):
-        while self.state.running:
-            try:
-                prompt = self._get_prompt_tokens()
-                sys.stdout.write(prompt)
-                sys.stdout.flush()
-                line = sys.stdin.readline()
-                if not line:
-                    break
-                line = line.rstrip('\n\r')
-                if not line.strip():
-                    continue
-                self.execute_line(line)
-            except KeyboardInterrupt:
-                print()
-            except EOFError:
-                print()
-                break
-            except Exception as e:
-                print(f"pybash: {e}", file=sys.stderr)
+        readline.parse_and_bind("tab: complete")
+        readline.parse_and_bind("set completion-ignore-case on")
+        readline.set_completer(self._readline_completer)
+        readline.set_completer_delims(' \t\n|&;<>()$')
 
-    def _handle_tab(self, event):
-        self._invalidate_path_cache(self.state.cwd)
+    def _readline_completer(self, text, state):
+        if state == 0:
+            self._invalidate_path_cache(self.state.cwd)
+            self._rl_matches = self._get_completions(text)
+        try:
+            return self._rl_matches[state]
+        except (IndexError, AttributeError):
+            return None
 
-        buf = event.app.current_buffer
-        cursor_pos = buf.cursor_position
-        text = buf.text[:cursor_pos]
+    def _get_completions(self, text):
+        line = readline.get_line_buffer()
+        before = line[:len(line) - len(text)]
 
-        word_start = cursor_pos
-        while word_start > 0 and text[word_start - 1] not in (' ', '\t', '|', '&', ';', '(', ')', '$', '<', '>'):
-            word_start -= 1
-        word = text[word_start:cursor_pos]
-
-        if not word and not text.endswith(' '):
-            return
-
-        tokens = text.split()
-        is_first_word = (len(tokens) <= 1)
+        tokens = before.split()
+        is_first_word = len(tokens) == 0
 
         if is_first_word:
-            matches = self._cmd_trie.starts_with(word)
+            return self._cmd_trie.starts_with(text)
         else:
-            matches = [name for name, _ in self._complete_path_trie(word)]
+            if '/' in text or '\\' in text:
+                dir_part = os.path.dirname(text) or '.'
+                base_part = os.path.basename(text)
+            else:
+                dir_part = '.'
+                base_part = text
+            trie = self._get_path_trie(dir_part)
+            return trie.starts_with(base_part)
+
+    def _read_console_key(self):
+        buf = (ctypes.c_char * 20)()
+        nread = ctypes.wintypes.DWORD()
+        _kernel32.ReadConsoleInputW(_hStdin, buf, 1, ctypes.byref(nread))
+        for i in range(nread.value):
+            off = i * _INPUT_RECORD_SIZE
+            evt_type = struct.unpack_from('<H', buf, off)[0]
+            if evt_type != _KEY_EVENT:
+                continue
+            bKeyDown = struct.unpack_from('<I', buf, off + 4)[0]
+            if not bKeyDown:
+                continue
+            vk = struct.unpack_from('<H', buf, off + 10)[0]
+            uc = struct.unpack_from('<H', buf, off + 14)[0]
+            if 32 <= uc < 127 or uc in (9, 10, 13):
+                return chr(uc), vk
+            if uc:
+                return None, vk
+            return None, vk
+        return None, 0
+
+    def _set_raw_mode(self, raw=True):
+        mode = ctypes.wintypes.DWORD()
+        _kernel32.GetConsoleMode(_hStdin, ctypes.byref(mode))
+        if raw:
+            mode.value &= ~(_ENABLE_PROCESSED_INPUT | _ENABLE_LINE_INPUT | _ENABLE_ECHO_INPUT)
+        else:
+            mode.value |= _ENABLE_PROCESSED_INPUT | _ENABLE_LINE_INPUT | _ENABLE_ECHO_INPUT
+        _kernel32.SetConsoleMode(_hStdin, mode)
+
+    def _read_console_key_nonblocking(self):
+        result = _kernel32.WaitForSingleObject(_hStdin, 16)
+        if result != 0:
+            return None, 0
+        return self._read_console_key()
+
+    def _run_win(self):
+        _kernel32.FlushConsoleInputBuffer(_hStdin)
+        self._set_raw_mode(True)
+        buf = ""
+        prompt = self._get_prompt_str()
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        _VK_CONTROL = 0x11
+        _VK_CTRL_C = 0x43
+        _VK_CTRL_D = 0x44
+        _VK_CTRL_L = 0x4C
+        _ctrl_c_held = False
+        _ctrl_d_held = False
+        _ctrl_l_held = False
+        try:
+            while self.state.running:
+                try:
+                    self._set_raw_mode(True)
+                    if _ctrl_c_flag[0]:
+                        _ctrl_c_flag[0] = False
+                        sys.stdout.write('^C\n')
+                        sys.stdout.flush()
+                        _kernel32.FlushConsoleInputBuffer(_hStdin)
+                        buf = ""
+                        prompt = self._get_prompt_str()
+                        sys.stdout.write(prompt)
+                        sys.stdout.flush()
+                        continue
+                    ctrl_down = bool(_user32.GetAsyncKeyState(_VK_CONTROL) & 0x8000)
+                    ctrl_c_now = ctrl_down and bool(_user32.GetAsyncKeyState(_VK_CTRL_C) & 0x8000)
+                    ctrl_d_now = ctrl_down and bool(_user32.GetAsyncKeyState(_VK_CTRL_D) & 0x8000)
+                    ctrl_l_now = ctrl_down and bool(_user32.GetAsyncKeyState(_VK_CTRL_L) & 0x8000)
+                    if ctrl_c_now and not _ctrl_c_held:
+                        _ctrl_c_held = True
+                        sys.stdout.write('^C\n')
+                        sys.stdout.flush()
+                        _kernel32.FlushConsoleInputBuffer(_hStdin)
+                        buf = ""
+                        prompt = self._get_prompt_str()
+                        sys.stdout.write(prompt)
+                        sys.stdout.flush()
+                        continue
+                    _ctrl_c_held = ctrl_c_now
+                    if ctrl_d_now and not _ctrl_d_held:
+                        _ctrl_d_held = True
+                        if not buf:
+                            print()
+                            break
+                        buf = ""
+                        sys.stdout.write('\n' + self._get_prompt_str())
+                        sys.stdout.flush()
+                        continue
+                    _ctrl_d_held = ctrl_d_now
+                    if ctrl_l_now and not _ctrl_l_held:
+                        _ctrl_l_held = True
+                        sys.stdout.write('\033[2J\033[H')
+                        sys.stdout.flush()
+                        prompt = self._get_prompt_str()
+                        sys.stdout.write(prompt)
+                        sys.stdout.flush()
+                        continue
+                    _ctrl_l_held = ctrl_l_now
+                    ch, vk = self._read_console_key_nonblocking()
+                    if vk == 0:
+                        import time
+                        time.sleep(0.01)
+                        continue
+                    if vk == 0x0D:
+                        sys.stdout.write('\n')
+                        sys.stdout.flush()
+                        clean = ''.join(c for c in buf if c.isprintable() or c in '\t')
+                        if clean.strip():
+                            self.execute_line(clean)
+                        _kernel32.FlushConsoleInputBuffer(_hStdin)
+                        buf = ""
+                        prompt = self._get_prompt_str()
+                        sys.stdout.write(prompt)
+                        sys.stdout.flush()
+                    elif vk == 0x03:
+                        sys.stdout.write('^C\n')
+                        sys.stdout.flush()
+                        _kernel32.FlushConsoleInputBuffer(_hStdin)
+                        buf = ""
+                        prompt = self._get_prompt_str()
+                        sys.stdout.write(prompt)
+                        sys.stdout.flush()
+                    elif vk == 0x04:
+                        if not buf:
+                            print()
+                            break
+                        buf = ""
+                        sys.stdout.write('\n')
+                        prompt = self._get_prompt_str()
+                        sys.stdout.write(prompt)
+                        sys.stdout.flush()
+                    elif vk == 0x0C:
+                        sys.stdout.write('\033[2J\033[H')
+                        sys.stdout.flush()
+                        prompt = self._get_prompt_str()
+                        sys.stdout.write(prompt)
+                        sys.stdout.flush()
+                    elif vk == 0x08:
+                        if buf:
+                            buf = buf[:-1]
+                            sys.stdout.write('\b \b')
+                            sys.stdout.flush()
+                    elif vk == 0x09:
+                        buf = self._tab_complete_win(buf)
+                    elif vk == 0x12:
+                        self._list_matches(buf)
+                        sys.stdout.write(prompt + buf)
+                        sys.stdout.flush()
+                    elif vk == 0x1B:
+                        raise EOFError
+                    elif ch and ch.isprintable():
+                        buf += ch
+                        sys.stdout.write(ch)
+                        sys.stdout.flush()
+                except KeyboardInterrupt:
+                    print()
+                    _kernel32.FlushConsoleInputBuffer(_hStdin)
+                    buf = ""
+                    prompt = self._get_prompt_str()
+                    sys.stdout.write(prompt)
+                    sys.stdout.flush()
+                except EOFError:
+                    print()
+                    break
+                except Exception as e:
+                    print(f"pybash: {e}", file=sys.stderr)
+                    buf = ""
+                    prompt = self._get_prompt_str()
+                    sys.stdout.write(prompt)
+                    sys.stdout.flush()
+        finally:
+            self._set_raw_mode(False)
+
+    def _tab_complete_win(self, buf):
+        self._invalidate_path_cache(self.state.cwd)
+        tokens = buf.split()
+        is_first_word = not ' ' in buf.rstrip()
+
+        if not buf or buf.endswith(' '):
+            word = ""
+        else:
+            word = tokens[-1] if tokens else ""
+
+        if is_first_word:
+            matches = self._cmd_trie.starts_with(word) if word else []
+        else:
+            if '/' in word or '\\' in word:
+                dir_part = os.path.dirname(word) or '.'
+                base_part = os.path.basename(word)
+            else:
+                dir_part = '.'
+                base_part = word
+            trie = self._get_path_trie(dir_part)
+            matches = trie.starts_with(base_part) if base_part else []
 
         if not matches:
-            return
+            return buf
+
+        common = os.path.commonprefix(matches)
+        if len(common) > len(word):
+            suffix = common[len(word):]
+            sys.stdout.write(suffix)
+            sys.stdout.flush()
+            return buf + suffix
 
         if len(matches) == 1:
             suffix = matches[0][len(word):]
-            buf.insert_text(suffix)
-            self._tab_matches = []
-            self._tab_pending = False
-        else:
-            common = os.path.commonprefix(matches)
-            if len(common) > len(word):
-                buf.insert_text(common[len(word):])
-                self._tab_matches = []
-                self._tab_pending = False
-            elif self._tab_pending and self._tab_matches == matches:
-                saved_text = buf.text
-                saved_cursor = buf.cursor_position
-                buf.reset()
-                col_width = max(len(m) for m in matches) + 2
-                cols = max(1, 80 // col_width)
-                lines = []
-                for i in range(0, len(matches), cols):
-                    row = matches[i:i + cols]
-                    lines.append('  '.join(f'{m:<{col_width}}' for m in row))
-                output = '\n'.join(lines) + '\n'
-                try:
-                    event.app.renderer.write_and_flush(output)
-                except Exception:
-                    sys.stdout.write(output)
-                    sys.stdout.flush()
-                buf.text = saved_text
-                buf.cursor_position = saved_cursor
-                event.app.invalidate()
-                self._tab_matches = []
-                self._tab_pending = False
+            sys.stdout.write(suffix)
+            sys.stdout.flush()
+            return buf + suffix
+
+        if is_first_word:
+            sorted_matches = self._sort_cmds(matches)
+            first = sorted_matches[0]
+            suffix = first[len(word):]
+            sys.stdout.write(suffix)
+            sys.stdout.flush()
+            return buf + suffix
+
+        return buf
+
+    def _sort_cmds(self, matches):
+        builtins = []
+        externals = []
+        for m in matches:
+            val = self._cmd_trie.search(m)
+            if val and val[0] == 'builtin':
+                builtins.append(m)
             else:
-                self._tab_matches = matches
-                self._tab_pending = True
+                externals.append(m)
+        return sorted(builtins) + sorted(externals)
+
+    def _list_matches(self, buf):
+        self._invalidate_path_cache(self.state.cwd)
+        tokens = buf.split()
+        is_first_word = not ' ' in buf.rstrip()
+
+        if not buf or buf.endswith(' '):
+            word = ""
+        else:
+            word = tokens[-1] if tokens else ""
+
+        if is_first_word:
+            matches = self._cmd_trie.starts_with(word) if word else []
+        else:
+            if '/' in word or '\\' in word:
+                dir_part = os.path.dirname(word) or '.'
+                base_part = os.path.basename(word)
+            else:
+                dir_part = '.'
+                base_part = word
+            trie = self._get_path_trie(dir_part)
+            matches = trie.starts_with(base_part) if base_part else []
+
+        if not matches:
+            sys.stdout.write('\a')
+            sys.stdout.flush()
+            return
+
+        sorted_matches = self._sort_cmds(matches) if is_first_word else sorted(matches)
+
+        sys.stdout.write('\n')
+        for m in sorted_matches:
+            sys.stdout.write(f"  {m}\n")
+        sys.stdout.flush()
+
+    def _run_readline(self):
+        while self.state.running:
+            try:
+                prompt = self._get_prompt_str()
+                line = input(prompt)
+                if not line.strip():
+                    continue
+                self.execute_line(line)
+            except KeyboardInterrupt:
+                print()
+            except EOFError:
+                print()
+                break
+            except Exception as e:
+                print(f"pybash: {e}", file=sys.stderr)
 
     def _build_cmd_trie(self):
         self._cmd_trie.clear()
@@ -344,8 +567,6 @@ class Shell:
 
     def _get_path_trie(self, dir_path):
         dir_path = os.path.expanduser(dir_path)
-        if dir_path in self._path_trie_cache:
-            return self._path_trie_cache[dir_path]
         trie = Trie()
         try:
             for entry in os.listdir(dir_path):
@@ -354,14 +575,10 @@ class Shell:
                 trie.insert(entry, ('dir' if is_dir else 'file', entry))
         except (PermissionError, FileNotFoundError):
             pass
-        self._path_trie_cache[dir_path] = trie
         return trie
 
     def _invalidate_path_cache(self, dir_path=None):
-        if dir_path:
-            self._path_trie_cache.pop(dir_path, None)
-        else:
-            self._path_trie_cache.clear()
+        self._path_trie_cache.clear()
 
     def _complete_path_trie(self, prefix):
         prefix = os.path.expanduser(prefix)
@@ -369,9 +586,9 @@ class Shell:
             dir_part = os.path.dirname(prefix) or '.'
             base_part = os.path.basename(prefix)
         else:
-            dir_part = '.'
+            dir_path = '.'
             base_part = prefix
-        trie = self._get_path_trie(dir_part)
+        trie = self._get_path_trie(dir_part if '/' in prefix or '\\' in prefix else '.')
         results = []
         for name in trie.starts_with(base_part):
             kind = trie.search(name)
