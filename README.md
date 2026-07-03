@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # PyBash
 
 A cross-platform bash shell implemented entirely in Python. Works on Windows, macOS, and Linux without depending on system commands.
@@ -285,3 +286,7 @@ pybash/
 ## License
 
 MIT
+=======
+# pybash
+A lightwight Bash.
+>>>>>>> 8f9b5eb27be6cdf6606c99de53171ea2d53b8813
