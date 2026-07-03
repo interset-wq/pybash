@@ -185,12 +185,17 @@ class Shell:
 
         suffix = "#" if is_root else "$"
 
-        return ANSI(
+        prompt = (
             f"\033[1;35mPyBash\033[0m "
             f"\033[1;32m{user}@{host}\033[0m "
             f"\033[1;34m{cwd_display}\033[0m "
             f"{suffix} "
         )
+
+        if HAS_PT:
+            return ANSI(prompt)
+        else:
+            return prompt
 
     def run(self):
         print(f"PyBash {platform.system()} - Type 'help' for help")
@@ -253,6 +258,8 @@ class Shell:
                 print(f"pybash: {e}", file=sys.stderr)
 
     def _handle_tab(self, event):
+        self._invalidate_path_cache(self.state.cwd)
+
         buf = event.app.current_buffer
         cursor_pos = buf.cursor_position
         text = buf.text[:cursor_pos]

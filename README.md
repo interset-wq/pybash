@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # PyBash
 
 A cross-platform bash shell implemented entirely in Python. Works on Windows, macOS, and Linux without depending on system commands.
@@ -71,64 +70,68 @@ cat input.txt | sort | uniq > output.txt
 ## Built-in Commands
 
 ### File Operations
-| Command | Description |
-|---------|-------------|
-| `ls` | List directory contents (`-l`, `-a`, `-h`, `-R`) |
-| `cat` | Concatenate and print files (`-n`, `-s`) |
-| `cp` | Copy files and directories (`-r`, `-f`) |
-| `mv` | Move/rename files (`-f`, `-v`) |
-| `rm` | Remove files and directories (`-r`, `-f`) |
-| `mkdir` | Create directories (`-p`) |
-| `touch` | Create empty files or update timestamps |
-| `find` | Search for files (`-name`, `-type`, `-exec`) |
-| `chmod` | Change file permissions |
-| `ln` | Create links (`-s` for symbolic) |
-| `stat` | Display file status |
-| `du` | Estimate file space usage (`-h`) |
-| `df` | Report disk space usage |
+
+| Command   | Description                                              |
+| --------- | -------------------------------------------------------- |
+| `ls`    | List directory contents (`-l`, `-a`, `-h`, `-R`) |
+| `cat`   | Concatenate and print files (`-n`, `-s`)             |
+| `cp`    | Copy files and directories (`-r`, `-f`)              |
+| `mv`    | Move/rename files (`-f`, `-v`)                       |
+| `rm`    | Remove files and directories (`-r`, `-f`)            |
+| `mkdir` | Create directories (`-p`)                              |
+| `touch` | Create empty files or update timestamps                  |
+| `find`  | Search for files (`-name`, `-type`, `-exec`)       |
+| `chmod` | Change file permissions                                  |
+| `ln`    | Create links (`-s` for symbolic)                       |
+| `stat`  | Display file status                                      |
+| `du`    | Estimate file space usage (`-h`)                       |
+| `df`    | Report disk space usage                                  |
 
 ### Text Processing
-| Command | Description |
-|---------|-------------|
-| `grep` | Search text patterns (`-i`, `-v`, `-n`, `-w`) |
-| `sort` | Sort lines (`-r`, `-n`, `-u`) |
-| `uniq` | Filter duplicate lines (`-c`, `-d`) |
-| `wc` | Count lines, words, characters (`-l`, `-w`, `-c`) |
-| `head` | Output first lines (`-n N`) |
-| `tail` | Output last lines (`-n N`, `-f`) |
-| `cut` | Extract columns (`-d`, `-f`) |
-| `tr` | Translate characters (`-d`, `-s`) |
-| `sed` | Stream editor (`s/pattern/replacement/`) |
-| `awk` | Pattern scanning (`{print $1}`) |
-| `diff` | Compare files |
-| `tee` | Read from stdin and write to file |
+
+| Command  | Description                                             |
+| -------- | ------------------------------------------------------- |
+| `grep` | Search text patterns (`-i`, `-v`, `-n`, `-w`)   |
+| `sort` | Sort lines (`-r`, `-n`, `-u`)                     |
+| `uniq` | Filter duplicate lines (`-c`, `-d`)                 |
+| `wc`   | Count lines, words, characters (`-l`, `-w`, `-c`) |
+| `head` | Output first lines (`-n N`)                           |
+| `tail` | Output last lines (`-n N`, `-f`)                    |
+| `cut`  | Extract columns (`-d`, `-f`)                        |
+| `tr`   | Translate characters (`-d`, `-s`)                   |
+| `sed`  | Stream editor (`s/pattern/replacement/`)              |
+| `awk`  | Pattern scanning (`{print $1}`)                       |
+| `diff` | Compare files                                           |
+| `tee`  | Read from stdin and write to file                       |
 
 ### System
-| Command | Description |
-|---------|-------------|
-| `date` | Display/set date and time |
-| `uname` | System information (`-a`) |
-| `whoami` | Current username |
-| `hostname` | System hostname |
-| `env` | Environment variables |
-| `export` | Set environment variables |
-| `which` | Locate a command |
-| `type` | Display command type |
-| `sleep` | Delay for N seconds |
-| `seq` | Print number sequences |
+
+| Command      | Description                 |
+| ------------ | --------------------------- |
+| `date`     | Display/set date and time   |
+| `uname`    | System information (`-a`) |
+| `whoami`   | Current username            |
+| `hostname` | System hostname             |
+| `env`      | Environment variables       |
+| `export`   | Set environment variables   |
+| `which`    | Locate a command            |
+| `type`     | Display command type        |
+| `sleep`    | Delay for N seconds         |
+| `seq`      | Print number sequences      |
 
 ### Shell Control
-| Command | Description |
-|---------|-------------|
-| `cd` | Change directory |
-| `pwd` | Print working directory |
-| `echo` | Print arguments (`-n`, `-e`) |
-| `printf` | Formatted output |
-| `source` / `.` | Execute script in current shell |
-| `alias` | Create command aliases |
-| `history` | Command history |
-| `help` | Display help |
-| `exit` | Exit the shell |
+
+| Command            | Description                      |
+| ------------------ | -------------------------------- |
+| `cd`             | Change directory                 |
+| `pwd`            | Print working directory          |
+| `echo`           | Print arguments (`-n`, `-e`) |
+| `printf`         | Formatted output                 |
+| `source` / `.` | Execute script in current shell  |
+| `alias`          | Create command aliases           |
+| `history`        | Command history                  |
+| `help`           | Display help                     |
+| `exit`           | Exit the shell                   |
 
 ## Shell Scripting
 
@@ -286,7 +289,4 @@ pybash/
 ## License
 
 MIT
-=======
-# pybash
-A lightwight Bash.
->>>>>>> 8f9b5eb27be6cdf6606c99de53171ea2d53b8813
+
