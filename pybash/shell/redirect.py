@@ -2,6 +2,9 @@
 import os
 import sys
 import re
+import platform
+
+IS_WINDOWS = platform.system() == "Windows"
 
 
 class RedirectHandler:
@@ -53,6 +56,8 @@ class RedirectHandler:
         saved_streams = []
         for fd, mode, filename in redirects:
             filename = os.path.expanduser(filename)
+            if IS_WINDOWS and filename in ('/dev/null', 'NUL', 'nul'):
+                filename = 'NUL'
             try:
                 saved_fd = os.dup(fd)
                 saved.append((fd, saved_fd))
