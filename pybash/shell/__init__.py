@@ -675,16 +675,37 @@ class Shell:
         path = os.path.expandvars(path)
         return [d for d in path.split(os.pathsep) if d]
 
+    def _sync_env_to_state(self):
+        for key in list(self.state.vars.keys()):
+            if key not in os.environ:
+                self.state.vars.pop(key, None)
+        for key in os.environ:
+            if key not in self.state.vars:
+                self.state.vars[key] = os.environ[key]
+
     def _find_in_path(self, cmd):
         if IS_WINDOWS:
             exe_exts = ('.exe', '.com', '.cmd', '.bat', '.ps1')
         else:
             exe_exts = ('',)
+        if os.path.isabs(cmd) and os.path.isfile(cmd):
+            return cmd
+        if os.path.isfile(cmd):
+            return os.path.abspath(cmd)
+        cmd_ext = os.path.splitext(cmd)[1].lower()
+        has_ext = cmd_ext in ('.exe', '.com', '.cmd', '.bat', '.ps1')
         for d in self._get_path_dirs():
-            for ext in exe_exts:
-                full = os.path.join(d, cmd + ext)
+            if not os.path.isdir(d):
+                continue
+            if has_ext:
+                full = os.path.join(d, cmd)
                 if os.path.isfile(full):
                     return full
+            else:
+                for ext in exe_exts:
+                    full = os.path.join(d, cmd + ext)
+                    if os.path.isfile(full):
+                        return full
         return None
 
     def _run_external(self, tokens):
@@ -700,17 +721,51 @@ class Shell:
 
                 if not is_exe:
                     if is_script:
-                        tokens = ['cmd', '/c'] + tokens
+                        resolved = self._find_in_path(cmd)
+                        if resolved:
+                            tokens = ['cmd', '/c'] + [resolved] + tokens[1:]
+                        else:
+                            tokens = ['cmd', '/c'] + tokens
                     else:
                         for d in self._get_path_dirs():
                             for ext in script_exts:
                                 full = os.path.join(d, cmd + ext)
                                 if os.path.isfile(full):
-                                    tokens = ['cmd', '/c'] + tokens
+                                    tokens = ['cmd', '/c'] + [full] + tokens[1:]
                                     break
                             else:
                                 continue
                             break
+
+            if IS_WINDOWS and tokens[0:2] == ['cmd', '/c'] and len(tokens) > 2:
+                env_dir = os.path.join(os.environ.get('TEMP', os.path.expanduser('~')), '.pybash')
+                os.makedirs(env_dir, exist_ok=True)
+                env_file = os.path.join(env_dir, 'env.txt')
+                inner = ' '.join(tokens[2:])
+                dump_cmd = f'{inner} & set > {env_file}'
+                proc = subprocess.Popen(
+                    ['cmd', '/c', dump_cmd],
+                    stdin=None, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    cwd=os.getcwd(), env=os.environ.copy(),
+                )
+                proc.wait()
+                if os.path.isfile(env_file):
+                    try:
+                        new_env = {}
+                        with open(env_file, 'r', encoding='utf-8', errors='replace') as f:
+                            for line in f:
+                                line = line.rstrip('\r\n')
+                                if '=' in line:
+                                    k, v = line.split('=', 1)
+                                    new_env[k] = v
+                        os.environ.clear()
+                        os.environ.update(new_env)
+                        os.unlink(env_file)
+                    except Exception:
+                        pass
+                    self._sync_env_to_state()
+                self.state.last_return = proc.returncode
+                return proc.returncode
 
             proc = subprocess.Popen(
                 tokens,

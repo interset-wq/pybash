@@ -100,9 +100,46 @@ class ShellControlCommands:
 
     def cmd_source(self, args):
         if not args: print("pybash: source: filename required", file=sys.stderr); return 1
+        fn = args[0]
+        if IS_WINDOWS:
+            fn_lower = fn.lower()
+            is_bat = fn_lower.endswith(('.bat', '.cmd'))
+            if not is_bat:
+                for ext in ('.bat', '.cmd'):
+                    if os.path.isfile(fn + ext):
+                        fn = fn + ext
+                        is_bat = True
+                        break
+            if is_bat:
+                resolved = fn
+                if not os.path.isabs(fn) and os.path.isfile(fn):
+                    resolved = os.path.abspath(fn)
+                env_file = os.path.join(os.environ.get('TEMP', os.path.expanduser('~')), '.pybash', 'env.txt')
+                os.makedirs(os.path.dirname(env_file), exist_ok=True)
+                dump_cmd = f'{resolved} & set > {env_file}'
+                proc = subprocess.run(
+                    ['cmd', '/c', dump_cmd],
+                    capture_output=True, cwd=os.getcwd(), env=os.environ.copy(),
+                )
+                if os.path.isfile(env_file):
+                    try:
+                        new_env = {}
+                        with open(env_file, 'r', encoding='utf-8', errors='replace') as f:
+                            for line in f:
+                                line = line.rstrip('\r\n')
+                                if '=' in line:
+                                    k, v = line.split('=', 1)
+                                    new_env[k] = v
+                        os.environ.clear()
+                        os.environ.update(new_env)
+                        os.unlink(env_file)
+                    except Exception:
+                        pass
+                    self.shell._sync_env_to_state()
+                return proc.returncode
         from pybash.script import ScriptEngine
         engine = ScriptEngine(self.state, self.shell)
-        engine.execute_file(args[0])
+        engine.execute_file(fn)
         return self.state.last_return
 
     def cmd_type(self, args):
