@@ -128,7 +128,14 @@ class Shell:
 
         suffix = "#" if is_root else "$"
 
+        venv_prefix = ""
+        venv = os.environ.get("VIRTUAL_ENV")
+        if venv:
+            venv_name = os.path.basename(venv)
+            venv_prefix = f"(\033[1;36m{venv_name}\033[0m) "
+
         return (
+            f"{venv_prefix}"
             f"\033[1;35mPyBash\033[0m "
             f"\033[1;32m{user}@{host}\033[0m "
             f"\033[1;34m{cwd_display}\033[0m "
