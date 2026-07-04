@@ -95,16 +95,16 @@ class WindowsCompleter:
         if not matches:
             return buf
 
-        common = os.path.commonprefix([m.rstrip('/') for m in matches])
-        if len(common) > len(word):
-            suffix = common[len(word):]
+        common = os.path.commonprefix(matches)
+        if len(common) > len(base_part):
+            suffix = common[len(base_part):]
             import sys
             sys.stdout.write(suffix)
             sys.stdout.flush()
             return buf + suffix
 
         if len(matches) == 1:
-            suffix = matches[0][len(word):]
+            suffix = matches[0][len(base_part):]
             import sys
             sys.stdout.write(suffix)
             sys.stdout.flush()
