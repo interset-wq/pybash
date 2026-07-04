@@ -345,12 +345,30 @@ class Shell:
                         self._win_complete.list_matches(buf)
                         self._redraw_win_line(prompt, buf, cursor_pos)
                     elif vk == 0x25:
-                        if cursor_pos > 0:
+                        if ctrl_down:
+                            if cursor_pos > 0:
+                                pos = cursor_pos - 1
+                                while pos > 0 and buf[pos] == ' ':
+                                    pos -= 1
+                                while pos > 0 and buf[pos - 1] != ' ':
+                                    pos -= 1
+                                cursor_pos = pos
+                                self._redraw_win_line(prompt, buf, cursor_pos)
+                        elif cursor_pos > 0:
                             cursor_pos -= 1
                             sys.stdout.write('\033[1D')
                             sys.stdout.flush()
                     elif vk == 0x27:
-                        if cursor_pos < len(buf):
+                        if ctrl_down:
+                            if cursor_pos < len(buf):
+                                pos = cursor_pos
+                                while pos < len(buf) and buf[pos] != ' ':
+                                    pos += 1
+                                while pos < len(buf) and buf[pos] == ' ':
+                                    pos += 1
+                                cursor_pos = pos
+                                self._redraw_win_line(prompt, buf, cursor_pos)
+                        elif cursor_pos < len(buf):
                             cursor_pos += 1
                             sys.stdout.write('\033[1C')
                             sys.stdout.flush()
@@ -427,6 +445,8 @@ class Shell:
 
     def _get_path_trie(self, dir_path):
         dir_path = os.path.expanduser(dir_path)
+        if dir_path in self._path_trie_cache:
+            return self._path_trie_cache[dir_path]
         trie = Trie()
         try:
             for entry in os.listdir(dir_path):
@@ -435,6 +455,7 @@ class Shell:
                 trie.insert(entry, ('dir' if is_dir else 'file', entry))
         except (PermissionError, FileNotFoundError):
             pass
+        self._path_trie_cache[dir_path] = trie
         return trie
 
     def _invalidate_path_cache(self, dir_path=None):

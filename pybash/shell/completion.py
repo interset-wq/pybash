@@ -6,6 +6,17 @@ from pybash.utils import Trie
 IS_WINDOWS = platform.system() == "Windows"
 
 
+def _mark_dirs(trie, matches):
+    result = []
+    for m in matches:
+        val = trie.search(m)
+        if val and val[0] == 'dir':
+            result.append(m + '/')
+        else:
+            result.append(m)
+    return result
+
+
 class ReadlineCompleter:
     """Readline-based tab completer for Linux/macOS."""
 
@@ -47,7 +58,8 @@ class ReadlineCompleter:
                 dir_part = '.'
                 base_part = text
             trie = self.shell._get_path_trie(dir_part)
-            return trie.starts_with(base_part)
+            matches = trie.starts_with(base_part)
+            return _mark_dirs(trie, matches)
 
 
 class WindowsCompleter:
@@ -76,12 +88,14 @@ class WindowsCompleter:
                 dir_part = '.'
                 base_part = word
             trie = self.shell._get_path_trie(dir_part)
-            matches = trie.starts_with(base_part) if base_part else []
+            matches = trie.starts_with(base_part)
+            if not is_first_word:
+                matches = _mark_dirs(trie, matches)
 
         if not matches:
             return buf
 
-        common = os.path.commonprefix(matches)
+        common = os.path.commonprefix([m.rstrip('/') for m in matches])
         if len(common) > len(word):
             suffix = common[len(word):]
             import sys
@@ -127,7 +141,9 @@ class WindowsCompleter:
                 dir_part = '.'
                 base_part = word
             trie = self.shell._get_path_trie(dir_part)
-            matches = trie.starts_with(base_part) if base_part else []
+            matches = trie.starts_with(base_part)
+            if not is_first_word:
+                matches = _mark_dirs(trie, matches)
 
         if not matches:
             import sys
