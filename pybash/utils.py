@@ -208,7 +208,29 @@ class Tokenizer:
 
         if current:
             tokens.append(current)
-        return tokens
+        return Tokenizer._split_redirects(tokens)
+
+    @staticmethod
+    def _split_redirects(tokens):
+        import re
+        result = []
+        for tok in tokens:
+            m = re.match(r'^(\d+)(>>?)', tok)
+            if m:
+                result.append(m.group(1) + m.group(2))
+                rest = tok[len(m.group(0)):]
+                if rest:
+                    result.append(rest)
+                continue
+            m = re.match(r'^(>>?)', tok)
+            if m:
+                result.append(m.group(1))
+                rest = tok[len(m.group(0)):]
+                if rest:
+                    result.append(rest)
+                continue
+            result.append(tok)
+        return result
 
     @staticmethod
     def split_pipes(line):

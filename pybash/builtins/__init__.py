@@ -132,6 +132,7 @@ class BuiltinCommands(FileCommands, TextCommands, SystemCommands, ShellControlCo
             'timeout': self.cmd_timeout,
             'true': lambda a: 0,
             'false': lambda a: 1,
+            'hash': lambda a: 0,
             'break': self.cmd_break,
             'continue': self.cmd_continue,
         }
