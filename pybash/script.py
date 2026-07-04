@@ -638,6 +638,8 @@ class ScriptEngine:
             else:
                 value = self._expand_value(value)
             self.state.vars[var] = value
+            import os
+            os.environ[var] = value
 
     def _expand_value(self, value):
         if '$((' in value:
