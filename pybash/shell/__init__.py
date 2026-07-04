@@ -1,5 +1,5 @@
 """
-Core shell: REPL loop, command parsing, pipeline, redirection, variable expansion.
+Core shell: REPL loop, command parsing, pipeline, redirection.
 Tab completion via Trie. On Windows uses Console API via ctypes, on Linux uses readline.
 """
 import os
@@ -15,6 +15,8 @@ from pathlib import Path
 from io import StringIO
 
 from pybash.utils import Tokenizer, Trie
+from pybash.shell.redirect import RedirectHandler
+from pybash.shell.completion import ReadlineCompleter, WindowsCompleter
 
 IS_WINDOWS = platform.system() == "Windows"
 
@@ -49,7 +51,6 @@ if IS_WINDOWS:
     _kernel32.SetConsoleCtrlHandler(_console_ctrl_handler, True)
 else:
     import readline
-    msvcrt = None
 
 
 class ShellState:
@@ -62,107 +63,29 @@ class ShellState:
         self.history_file = str(Path.home() / ".pybash_history")
         self.alias_file = str(Path.home() / ".pybash_aliases")
         self.positional = []
+        self.history = []
+        self.history_index = -1
+        self._load_history()
+
+    def _load_history(self):
+        try:
+            with open(self.history_file, "r", encoding="utf-8") as f:
+                self.history = [line.rstrip("\n") for line in f if line.strip()]
+        except FileNotFoundError:
+            self.history = []
+        self.history_index = len(self.history)
+
+    def save_history(self):
+        try:
+            with open(self.history_file, "a", encoding="utf-8") as f:
+                for cmd in self.history:
+                    f.write(cmd + "\n")
+        except OSError:
+            pass
 
 
 from pybash.builtins import BuiltinCommands
 from pybash.script import ScriptEngine
-
-
-class RedirectHandler:
-    @staticmethod
-    def parse(tokens):
-        cmd_tokens = []
-        redirects = []
-        i = 0
-        while i < len(tokens):
-            tok = tokens[i]
-            if tok in ('>', '>>', '1>', '1>>'):
-                mode = 'a' if '>>' in tok else 'w'
-                if i + 1 < len(tokens):
-                    redirects.append((1, mode, tokens[i + 1]))
-                    i += 2
-                else:
-                    i += 1
-            elif tok in ('2>', '2>>'):
-                mode = 'a' if '>>' in tok else 'w'
-                if i + 1 < len(tokens):
-                    redirects.append((2, mode, tokens[i + 1]))
-                    i += 2
-                else:
-                    i += 1
-            elif tok in ('<', '0<'):
-                if i + 1 < len(tokens):
-                    redirects.append((0, 'r', tokens[i + 1]))
-                    i += 2
-                else:
-                    i += 1
-            elif re.match(r'^\d+>$', tok):
-                fd = int(tok[:-1])
-                if i + 1 < len(tokens):
-                    redirects.append((fd, 'w', tokens[i + 1]))
-                    i += 2
-            elif re.match(r'^\d+>>$', tok):
-                fd = int(tok[:-2])
-                if i + 1 < len(tokens):
-                    redirects.append((fd, 'a', tokens[i + 1]))
-                    i += 2
-            else:
-                cmd_tokens.append(tok)
-                i += 1
-        return cmd_tokens, redirects
-
-    @staticmethod
-    def apply(redirects):
-        saved = []
-        saved_streams = []
-        for fd, mode, filename in redirects:
-            filename = os.path.expanduser(filename)
-            try:
-                saved_fd = os.dup(fd)
-                saved.append((fd, saved_fd))
-                if fd == 0:
-                    f = open(filename, 'r', encoding='utf-8', errors='replace')
-                else:
-                    f = open(filename, mode, encoding='utf-8')
-                os.dup2(f.fileno(), fd)
-                if fd == 1:
-                    saved_streams.append((1, sys.stdout))
-                    sys.stdout = f
-                elif fd == 2:
-                    saved_streams.append((2, sys.stderr))
-                    sys.stderr = f
-                if fd == 0:
-                    f.close()
-            except Exception as e:
-                print(f"pybash: redirect error: {e}", file=sys.stderr)
-                RedirectHandler.restore(saved, saved_streams)
-                return None
-        return saved, saved_streams
-
-    @staticmethod
-    def restore(saved, saved_streams=None):
-        if saved is None:
-            return
-        for fd, saved_fd in saved:
-            try:
-                os.dup2(saved_fd, fd)
-                os.close(saved_fd)
-            except Exception:
-                pass
-        if saved_streams:
-            for fd, stream in saved_streams:
-                if fd == 1:
-                    try:
-                        sys.stdout.flush()
-                    except Exception:
-                        pass
-                    sys.stdout = stream
-                elif fd == 2:
-                    try:
-                        sys.stderr.flush()
-                    except Exception:
-                        pass
-                    sys.stderr = stream
 
 
 class Shell:
@@ -173,7 +96,8 @@ class Shell:
         self._cmd_trie = Trie()
         self._path_trie_cache = {}
         self._build_cmd_trie()
-        self._rl_saved_completer = None
+        self._readline = ReadlineCompleter(self) if not IS_WINDOWS else None
+        self._win_complete = WindowsCompleter(self) if IS_WINDOWS else None
 
     def _get_prompt_str(self):
         cwd = os.getcwd()
@@ -215,10 +139,10 @@ class Shell:
         if IS_WINDOWS:
             self._run_win()
         else:
-            self._setup_readline()
+            self._readline.setup()
             self._run_readline()
 
-    def _setup_readline(self):
+    def _run_readline(self):
         hist_file = self.state.history_file
         try:
             readline.read_history_file(hist_file)
@@ -227,38 +151,20 @@ class Shell:
         readline.set_history_length(10000)
         atexit.register(readline.write_history_file, hist_file)
 
-        readline.parse_and_bind("tab: complete")
-        readline.parse_and_bind("set completion-ignore-case on")
-        readline.set_completer(self._readline_completer)
-        readline.set_completer_delims(' \t\n|&;<>()$')
-
-    def _readline_completer(self, text, state):
-        if state == 0:
-            self._invalidate_path_cache(self.state.cwd)
-            self._rl_matches = self._get_completions(text)
-        try:
-            return self._rl_matches[state]
-        except (IndexError, AttributeError):
-            return None
-
-    def _get_completions(self, text):
-        line = readline.get_line_buffer()
-        before = line[:len(line) - len(text)]
-
-        tokens = before.split()
-        is_first_word = len(tokens) == 0
-
-        if is_first_word:
-            return self._cmd_trie.starts_with(text)
-        else:
-            if '/' in text or '\\' in text:
-                dir_part = os.path.dirname(text) or '.'
-                base_part = os.path.basename(text)
-            else:
-                dir_part = '.'
-                base_part = text
-            trie = self._get_path_trie(dir_part)
-            return trie.starts_with(base_part)
+        while self.state.running:
+            try:
+                prompt = self._get_prompt_str()
+                line = input(prompt)
+                if not line.strip():
+                    continue
+                self.execute_line(line)
+            except KeyboardInterrupt:
+                print()
+            except EOFError:
+                print()
+                break
+            except Exception as e:
+                print(f"pybash: {e}", file=sys.stderr)
 
     def _read_console_key(self):
         buf = (ctypes.c_char * 20)()
@@ -368,6 +274,8 @@ class Shell:
                         sys.stdout.flush()
                         clean = ''.join(c for c in buf if c.isprintable() or c in '\t')
                         if clean.strip():
+                            self.state.history.append(clean.strip())
+                            self.state.history_index = len(self.state.history)
                             self.execute_line(clean)
                         _kernel32.FlushConsoleInputBuffer(_hStdin)
                         buf = ""
@@ -402,10 +310,26 @@ class Shell:
                             buf = buf[:-1]
                             sys.stdout.write('\b \b')
                             sys.stdout.flush()
+                    elif vk == 0x26:
+                        if self.state.history and self.state.history_index > 0:
+                            self.state.history_index -= 1
+                            buf = self.state.history[self.state.history_index]
+                            sys.stdout.write('\r\033[K' + prompt + buf)
+                            sys.stdout.flush()
+                    elif vk == 0x28:
+                        if self.state.history:
+                            if self.state.history_index < len(self.state.history) - 1:
+                                self.state.history_index += 1
+                                buf = self.state.history[self.state.history_index]
+                            else:
+                                self.state.history_index = len(self.state.history)
+                                buf = ""
+                            sys.stdout.write('\r\033[K' + prompt + buf)
+                            sys.stdout.flush()
                     elif vk == 0x09:
-                        buf = self._tab_complete_win(buf)
+                        buf = self._win_complete.tab_complete(buf)
                     elif vk == 0x12:
-                        self._list_matches(buf)
+                        self._win_complete.list_matches(buf)
                         sys.stdout.write(prompt + buf)
                         sys.stdout.flush()
                     elif vk == 0x1B:
@@ -433,54 +357,6 @@ class Shell:
         finally:
             self._set_raw_mode(False)
 
-    def _tab_complete_win(self, buf):
-        self._invalidate_path_cache(self.state.cwd)
-        tokens = buf.split()
-        is_first_word = not ' ' in buf.rstrip()
-
-        if not buf or buf.endswith(' '):
-            word = ""
-        else:
-            word = tokens[-1] if tokens else ""
-
-        if is_first_word:
-            matches = self._cmd_trie.starts_with(word) if word else []
-        else:
-            if '/' in word or '\\' in word:
-                dir_part = os.path.dirname(word) or '.'
-                base_part = os.path.basename(word)
-            else:
-                dir_part = '.'
-                base_part = word
-            trie = self._get_path_trie(dir_part)
-            matches = trie.starts_with(base_part) if base_part else []
-
-        if not matches:
-            return buf
-
-        common = os.path.commonprefix(matches)
-        if len(common) > len(word):
-            suffix = common[len(word):]
-            sys.stdout.write(suffix)
-            sys.stdout.flush()
-            return buf + suffix
-
-        if len(matches) == 1:
-            suffix = matches[0][len(word):]
-            sys.stdout.write(suffix)
-            sys.stdout.flush()
-            return buf + suffix
-
-        if is_first_word:
-            sorted_matches = self._sort_cmds(matches)
-            first = sorted_matches[0]
-            suffix = first[len(word):]
-            sys.stdout.write(suffix)
-            sys.stdout.flush()
-            return buf + suffix
-
-        return buf
-
     def _sort_cmds(self, matches):
         builtins = []
         externals = []
@@ -491,56 +367,6 @@ class Shell:
             else:
                 externals.append(m)
         return sorted(builtins) + sorted(externals)
-
-    def _list_matches(self, buf):
-        self._invalidate_path_cache(self.state.cwd)
-        tokens = buf.split()
-        is_first_word = not ' ' in buf.rstrip()
-
-        if not buf or buf.endswith(' '):
-            word = ""
-        else:
-            word = tokens[-1] if tokens else ""
-
-        if is_first_word:
-            matches = self._cmd_trie.starts_with(word) if word else []
-        else:
-            if '/' in word or '\\' in word:
-                dir_part = os.path.dirname(word) or '.'
-                base_part = os.path.basename(word)
-            else:
-                dir_part = '.'
-                base_part = word
-            trie = self._get_path_trie(dir_part)
-            matches = trie.starts_with(base_part) if base_part else []
-
-        if not matches:
-            sys.stdout.write('\a')
-            sys.stdout.flush()
-            return
-
-        sorted_matches = self._sort_cmds(matches) if is_first_word else sorted(matches)
-
-        sys.stdout.write('\n')
-        for m in sorted_matches:
-            sys.stdout.write(f"  {m}\n")
-        sys.stdout.flush()
-
-    def _run_readline(self):
-        while self.state.running:
-            try:
-                prompt = self._get_prompt_str()
-                line = input(prompt)
-                if not line.strip():
-                    continue
-                self.execute_line(line)
-            except KeyboardInterrupt:
-                print()
-            except EOFError:
-                print()
-                break
-            except Exception as e:
-                print(f"pybash: {e}", file=sys.stderr)
 
     def _build_cmd_trie(self):
         self._cmd_trie.clear()
@@ -580,23 +406,6 @@ class Shell:
     def _invalidate_path_cache(self, dir_path=None):
         self._path_trie_cache.clear()
 
-    def _complete_path_trie(self, prefix):
-        prefix = os.path.expanduser(prefix)
-        if '/' in prefix or '\\' in prefix:
-            dir_part = os.path.dirname(prefix) or '.'
-            base_part = os.path.basename(prefix)
-        else:
-            dir_path = '.'
-            base_part = prefix
-        trie = self._get_path_trie(dir_part if '/' in prefix or '\\' in prefix else '.')
-        results = []
-        for name in trie.starts_with(base_part):
-            kind = trie.search(name)
-            if kind:
-                kind = kind[0]
-            results.append((name, kind))
-        return results
-
     def execute_line(self, line):
         line = line.strip()
         if not line:
@@ -607,17 +416,51 @@ class Shell:
 
     def _dispatch(self, line):
         stripped = line.strip()
-        if re.match(r'^(if|for|while|until|case|function|select)\b', stripped):
-            return self.engine.execute_block([stripped])
+        if re.match(r'^function\s+\w+.*\{', stripped):
+            brace_idx = stripped.index('{')
+            close_idx = stripped.index('}', brace_idx)
+            after = stripped[close_idx+1:].strip().lstrip(';').strip()
+            self.engine.execute_block([stripped[:close_idx+1].strip()])
+            if after:
+                return self.execute_line(after)
+            return 0
         if re.match(r'^[A-Za-z_]\w*\s*\(\s*\)\s*\{', stripped):
-            return self.engine.execute_block([stripped])
+            brace_idx = stripped.index('{')
+            close_idx = stripped.index('}', brace_idx)
+            after = stripped[close_idx+1:].strip().lstrip(';').strip()
+            self.engine.execute_block([stripped[:close_idx+1].strip()])
+            if after:
+                return self.execute_line(after)
+            return 0
         parts = self._split_semicolons(line)
         if len(parts) > 1:
+            for i, p in enumerate(parts):
+                ps = p.strip()
+                if re.match(r'^(if|for|while|until|case|function|select)\b', ps):
+                    result = 0
+                    for prev in parts[:i]:
+                        prev = prev.strip()
+                        if prev:
+                            result = self.execute_line(prev)
+                    rest = ';'.join(parts[i:]).strip()
+                    self.engine.execute_block([rest])
+                    return result
+                if re.match(r'^[A-Za-z_]\w*\s*\(\s*\)\s*\{', ps):
+                    result = 0
+                    for prev in parts[:i]:
+                        prev = prev.strip()
+                        if prev:
+                            result = self.execute_line(prev)
+                    rest = ';'.join(parts[i:]).strip()
+                    self.engine.execute_block([rest])
+                    return result
+            result = 0
             for p in parts:
-                if re.match(r'^(if|for|while|until|case|function|select)\b', p.strip()):
-                    return self.engine.execute_block([stripped])
-                if re.match(r'^[A-Za-z_]\w*\s*\(\s*\)\s*\{', p.strip()):
-                    return self.engine.execute_block([stripped])
+                p = p.strip()
+                if not p:
+                    continue
+                result = self.execute_line(p)
+            return result
         if '&&' in line or '||' in line:
             return self._handle_logical(line)
         if re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', stripped):

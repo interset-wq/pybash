@@ -163,7 +163,7 @@ class ScriptEngine:
                 name = rest[:rest.index('{')].strip().rstrip('(').rstrip(')')
                 body = [rest[rest.index('{') + 1:].strip()]
                 if '}' in body[0]:
-                    body[0] = body[0][:body[0].rindex('}')].strip()
+                    body[0] = body[0][:body[0].index('}')].strip()
                     self.state.functions[name] = self._clean_body(body)
                     return start + 1
                 j = start + 1
@@ -182,7 +182,7 @@ class ScriptEngine:
                 body_start = rest_after_paren[rest_after_paren.index('{') + 1:].strip()
                 body = [body_start]
                 if '}' in body[0]:
-                    body[0] = body[0][:body[0].rindex('}')].strip()
+                    body[0] = body[0][:body[0].index('}')].strip()
                     self.state.functions[name] = self._clean_body(body)
                     return start + 1
                 j = start + 1
@@ -236,6 +236,8 @@ class ScriptEngine:
                 p = parts[i].strip()
                 if i == 0:
                     cond = p[3:].strip() if p.startswith('if ') else p
+                    if cond.endswith(';'):
+                        cond = cond[:-1].strip()
                     i += 1
                     continue
                 if p == 'then':

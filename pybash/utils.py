@@ -4,6 +4,9 @@ Shared utilities: tokenizer, variable expansion, glob expansion, trie.
 import os
 import re
 import glob
+import platform
+
+IS_WINDOWS = platform.system() == "Windows"
 
 SPECIAL_VARS = {'?', '$', '!', '#', '@', '*', '0'}
 
@@ -93,7 +96,7 @@ class Tokenizer:
     @staticmethod
     def expand_variables(text, state):
         def replacer(m):
-            name = m.group(1) or m.group(2) or m.group(3)
+            name = m.group(1) or m.group(2) or m.group(3) or m.group(4)
             if name in SPECIAL_VARS:
                 if name == '?': return str(state.last_return)
                 elif name == '$': return str(os.getpid())
@@ -102,10 +105,15 @@ class Tokenizer:
                 elif name == '@': return ' '.join(state.positional)
                 elif name == '*': return ' '.join(state.positional)
                 elif name == '0': return 'pybash'
+            if name.isdigit() and int(name) > 0:
+                idx = int(name) - 1
+                if idx < len(state.positional):
+                    return state.positional[idx]
+                return ''
             if name in state.vars:
                 return state.vars[name]
             return os.environ.get(name, '')
-        return re.sub(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)|\$(\d+)', replacer, text)
+        return re.sub(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)|\$(\d+)|\$([?$#!@*])', replacer, text)
 
     @staticmethod
     def expand_arithmetic(text, state):
@@ -173,7 +181,7 @@ class Tokenizer:
                 escape = False
                 i += 1
                 continue
-            if ch == '\\' and not in_sq:
+            if ch == '\\' and not in_sq and not IS_WINDOWS:
                 escape = True
                 i += 1
                 continue
@@ -215,7 +223,7 @@ class Tokenizer:
                 current += ch
                 escape = False
                 continue
-            if ch == '\\' and not in_sq:
+            if ch == '\\' and not in_sq and not IS_WINDOWS:
                 escape = True
                 continue
             if ch == "'" and not in_dq:
