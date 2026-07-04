@@ -92,6 +92,7 @@ class Shell:
     def __init__(self):
         self.state = ShellState()
         self.builtins = BuiltinCommands(self.state)
+        self.builtins.shell = self
         self.engine = ScriptEngine(self.state, self)
         self._cmd_trie = Trie()
         self._path_trie_cache = {}

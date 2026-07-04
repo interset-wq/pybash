@@ -27,6 +27,7 @@ class ContinueException(Exception):
 class BuiltinCommands(FileCommands, TextCommands, SystemCommands, ShellControlCommands):
     def __init__(self, state):
         self.state = state
+        self.shell = None
         self._aliases = {
             'dir': 'ls',
             'll': 'ls -l',

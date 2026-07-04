@@ -101,7 +101,7 @@ class ShellControlCommands:
     def cmd_source(self, args):
         if not args: print("pybash: source: filename required", file=sys.stderr); return 1
         from pybash.script import ScriptEngine
-        engine = ScriptEngine(self.state, None)
+        engine = ScriptEngine(self.state, self.shell)
         engine.execute_file(args[0])
         return self.state.last_return
 
