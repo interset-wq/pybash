@@ -199,11 +199,14 @@ class ShellControlCommands:
         return 0
 
     def cmd_unalias(self, args):
+        ret = 0
         for arg in args:
-            if arg in self.alias_map: del self.alias_map[arg]
-            else: print(f"pybash: unalias: {arg}: not found", file=sys.stderr)
+            if arg in self.alias_map:
+                del self.alias_map[arg]
+            else:
+                ret = 1
         self._save_aliases()
-        return 0
+        return ret
 
     def cmd_history(self, args):
         try:
