@@ -166,6 +166,12 @@ class Shell:
             except Exception as e:
                 print(f"pybash: {e}", file=sys.stderr)
 
+    def _redraw_win_line(self, prompt, buf, cursor_pos):
+        sys.stdout.write('\r\033[K' + prompt + buf)
+        if cursor_pos < len(buf):
+            sys.stdout.write(f'\033[{len(buf) - cursor_pos}D')
+        sys.stdout.flush()
+
     def _read_console_key(self):
         buf = (ctypes.c_char * 20)()
         nread = ctypes.wintypes.DWORD()
@@ -206,6 +212,7 @@ class Shell:
         _kernel32.FlushConsoleInputBuffer(_hStdin)
         self._set_raw_mode(True)
         buf = ""
+        cursor_pos = 0
         prompt = self._get_prompt_str()
         sys.stdout.write(prompt)
         sys.stdout.flush()
@@ -226,6 +233,7 @@ class Shell:
                         sys.stdout.flush()
                         _kernel32.FlushConsoleInputBuffer(_hStdin)
                         buf = ""
+                        cursor_pos = 0
                         prompt = self._get_prompt_str()
                         sys.stdout.write(prompt)
                         sys.stdout.flush()
@@ -240,6 +248,7 @@ class Shell:
                         sys.stdout.flush()
                         _kernel32.FlushConsoleInputBuffer(_hStdin)
                         buf = ""
+                        cursor_pos = 0
                         prompt = self._get_prompt_str()
                         sys.stdout.write(prompt)
                         sys.stdout.flush()
@@ -251,6 +260,7 @@ class Shell:
                             print()
                             break
                         buf = ""
+                        cursor_pos = 0
                         sys.stdout.write('\n' + self._get_prompt_str())
                         sys.stdout.flush()
                         continue
@@ -260,8 +270,7 @@ class Shell:
                         sys.stdout.write('\033[2J\033[H')
                         sys.stdout.flush()
                         prompt = self._get_prompt_str()
-                        sys.stdout.write(prompt)
-                        sys.stdout.flush()
+                        self._redraw_win_line(prompt, buf, cursor_pos)
                         continue
                     _ctrl_l_held = ctrl_l_now
                     ch, vk = self._read_console_key_nonblocking()
@@ -279,6 +288,7 @@ class Shell:
                             self.execute_line(clean)
                         _kernel32.FlushConsoleInputBuffer(_hStdin)
                         buf = ""
+                        cursor_pos = 0
                         prompt = self._get_prompt_str()
                         sys.stdout.write(prompt)
                         sys.stdout.flush()
@@ -287,6 +297,7 @@ class Shell:
                         sys.stdout.flush()
                         _kernel32.FlushConsoleInputBuffer(_hStdin)
                         buf = ""
+                        cursor_pos = 0
                         prompt = self._get_prompt_str()
                         sys.stdout.write(prompt)
                         sys.stdout.flush()
@@ -295,6 +306,7 @@ class Shell:
                             print()
                             break
                         buf = ""
+                        cursor_pos = 0
                         sys.stdout.write('\n')
                         prompt = self._get_prompt_str()
                         sys.stdout.write(prompt)
@@ -303,19 +315,18 @@ class Shell:
                         sys.stdout.write('\033[2J\033[H')
                         sys.stdout.flush()
                         prompt = self._get_prompt_str()
-                        sys.stdout.write(prompt)
-                        sys.stdout.flush()
+                        self._redraw_win_line(prompt, buf, cursor_pos)
                     elif vk == 0x08:
-                        if buf:
-                            buf = buf[:-1]
-                            sys.stdout.write('\b \b')
-                            sys.stdout.flush()
+                        if cursor_pos > 0:
+                            buf = buf[:cursor_pos-1] + buf[cursor_pos:]
+                            cursor_pos -= 1
+                            self._redraw_win_line(prompt, buf, cursor_pos)
                     elif vk == 0x26:
                         if self.state.history and self.state.history_index > 0:
                             self.state.history_index -= 1
                             buf = self.state.history[self.state.history_index]
-                            sys.stdout.write('\r\033[K' + prompt + buf)
-                            sys.stdout.flush()
+                            cursor_pos = len(buf)
+                            self._redraw_win_line(prompt, buf, cursor_pos)
                     elif vk == 0x28:
                         if self.state.history:
                             if self.state.history_index < len(self.state.history) - 1:
@@ -324,24 +335,46 @@ class Shell:
                             else:
                                 self.state.history_index = len(self.state.history)
                                 buf = ""
-                            sys.stdout.write('\r\033[K' + prompt + buf)
-                            sys.stdout.flush()
+                            cursor_pos = len(buf)
+                            self._redraw_win_line(prompt, buf, cursor_pos)
                     elif vk == 0x09:
                         buf = self._win_complete.tab_complete(buf)
+                        cursor_pos = len(buf)
+                        self._redraw_win_line(prompt, buf, cursor_pos)
                     elif vk == 0x12:
                         self._win_complete.list_matches(buf)
-                        sys.stdout.write(prompt + buf)
-                        sys.stdout.flush()
+                        self._redraw_win_line(prompt, buf, cursor_pos)
+                    elif vk == 0x25:
+                        if cursor_pos > 0:
+                            cursor_pos -= 1
+                            sys.stdout.write('\033[1D')
+                            sys.stdout.flush()
+                    elif vk == 0x27:
+                        if cursor_pos < len(buf):
+                            cursor_pos += 1
+                            sys.stdout.write('\033[1C')
+                            sys.stdout.flush()
+                    elif vk == 0x24:
+                        if cursor_pos > 0:
+                            sys.stdout.write(f'\033[{cursor_pos}D')
+                            sys.stdout.flush()
+                            cursor_pos = 0
+                    elif vk == 0x23:
+                        if cursor_pos < len(buf):
+                            sys.stdout.write(f'\033[{len(buf) - cursor_pos}C')
+                            sys.stdout.flush()
+                            cursor_pos = len(buf)
                     elif vk == 0x1B:
                         raise EOFError
                     elif ch and ch.isprintable():
-                        buf += ch
-                        sys.stdout.write(ch)
-                        sys.stdout.flush()
+                        buf = buf[:cursor_pos] + ch + buf[cursor_pos:]
+                        cursor_pos += 1
+                        self._redraw_win_line(prompt, buf, cursor_pos)
                 except KeyboardInterrupt:
                     print()
                     _kernel32.FlushConsoleInputBuffer(_hStdin)
                     buf = ""
+                    cursor_pos = 0
                     prompt = self._get_prompt_str()
                     sys.stdout.write(prompt)
                     sys.stdout.flush()
@@ -351,6 +384,7 @@ class Shell:
                 except Exception as e:
                     print(f"pybash: {e}", file=sys.stderr)
                     buf = ""
+                    cursor_pos = 0
                     prompt = self._get_prompt_str()
                     sys.stdout.write(prompt)
                     sys.stdout.flush()
