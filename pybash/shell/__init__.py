@@ -656,13 +656,11 @@ class Shell:
                 self.state.last_return = 1
                 return 1
         elif cmd in self.state.functions:
-            old_vars = dict(self.state.vars)
             self.state.positional = list(args)
             for i, a in enumerate(args):
                 self.state.vars[str(i + 1)] = a
             self.state.vars['#'] = str(len(args))
             ret = self.engine.execute_block(self.state.functions[cmd])
-            self.state.vars.update(old_vars)
             self.state.last_return = ret
             return ret
         elif cmd in ('if', 'for', 'while', 'until', 'case', 'function', 'select'):
