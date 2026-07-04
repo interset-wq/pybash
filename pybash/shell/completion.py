@@ -78,6 +78,8 @@ class WindowsCompleter:
         else:
             word = tokens[-1] if tokens else ""
 
+        base_part = word
+
         if is_first_word:
             matches = self.shell._cmd_trie.starts_with(word) if word else []
         else:
@@ -86,7 +88,6 @@ class WindowsCompleter:
                 base_part = os.path.basename(word)
             else:
                 dir_part = '.'
-                base_part = word
             trie = self.shell._get_path_trie(dir_part)
             matches = trie.starts_with(base_part)
             if not is_first_word:
@@ -131,6 +132,8 @@ class WindowsCompleter:
         else:
             word = tokens[-1] if tokens else ""
 
+        base_part = word
+
         if is_first_word:
             matches = self.shell._cmd_trie.starts_with(word) if word else []
         else:
@@ -139,7 +142,6 @@ class WindowsCompleter:
                 base_part = os.path.basename(word)
             else:
                 dir_part = '.'
-                base_part = word
             trie = self.shell._get_path_trie(dir_part)
             matches = trie.starts_with(base_part)
             if not is_first_word:
